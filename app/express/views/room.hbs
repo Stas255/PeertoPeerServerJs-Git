@@ -1,0 +1,201 @@
+<div class="container">
+    <h1 class="text-center mt-5">File Sharing Room</h1>
+
+    <div class="row mt-5">
+        <div class="col-md-6">
+            <h3>Connected Users</h3>
+            <ul id="userList" class="list-group">
+            </ul>
+        </div>
+        <div class="col-md-6">
+            <h3>Available Files</h3>
+            <ul id="fileList" class="list-group">
+            </ul>
+        </div>
+    </div>
+
+    <div class="row mt-5">
+        <div class="col-md-6">
+            <h3>Import a File</h3>
+            <div class="form-group">
+                <input type="file" class="form-control-file" id="importFileInput">
+            </div>
+            <button class="btn btn-primary" onclick="openAccessToTransferByP2P()">Get Acsees for P2P</button>
+            <button class="btn btn-primary" onclick="sendFileToServer()">Sent it in server</button>
+        </div>
+    </div>
+
+    <div class="row mt-5">
+        <div class="col-md-12">
+            <h3>File Transfer Information</h3>
+            <button id="clearBtn" class="btn btn-danger mb-2">Clear</button>
+            <div id="transferInfo" class="alert alert-info">
+                <!-- Animated information about file transfers will be displayed here -->
+            </div>
+        </div>
+    </div>
+</div>
+
+<script src="/socket.io/socket.io.js"></script>
+<script src="/js/main.js"></script>
+<script src="/js/peer.js"></script>
+<script src="/js/socket.js"></script>
+<script src="/js/socket-room.js"></script>
+
+<script>
+    const userNameDiv = document.getElementById('userNameDiv');
+    userNameDiv.innerHTML = '<input type="text" class="form-control" id="userName" placeholder="Enter your name" disabled>' +
+        '<span id="nameError" class="text-info">Please enter your name</span>';
+    const nameError = document.getElementById('nameError');
+    const userNameInput = document.getElementById('userName');
+
+    var socket = null;
+    const urlParams = new URLSearchParams(window.location.search);
+    const roomId = window.location.pathname.split('/').pop();
+
+    let progressBarsInformations = {};
+
+    async function startConnecting() {
+        socket = await connectToServer(nameError, userNameInput);
+
+        socket.emit("joinToRoom", roomId);
+
+        setupEmitUserInformation(socket, document.getElementById('userList'));
+
+        setupEmitNewFileUploading(socket, document.getElementById('fileList'));
+
+        setupEmitJoinToRoom(socket, document.getElementById('userList'), document.getElementById('fileList'));
+
+        setupEmitRemoveServerFileInfor(socket);
+
+        setupEmitRemoveP2PFileInfor(socket);
+
+        setupEmitFileTransferInformationsInRoom(socket, progressBarsInformations);
+
+        setupEmitNewOpenAccessToTransferByP2P(socket, document.getElementById('fileList'));
+
+        setupEmitFileTransferInformationsInRoomsFinish(socket, progressBarsInformations);
+
+        socket.on('emitOfferToUser', async (data) => {
+            if (!data.error) {
+                const fileInput = document.getElementById('importFileInput');
+                const file = fileInput.files[0];
+                connectToUserAndSendFile(socket, data.offer, data.fromUserName, file);
+            } else {
+                nameError.style.display = 'block'
+                nameError.classList = "text-danger"
+                nameError.innerHTML = data.message
+            }
+        });
+
+    }
+
+    function downloadFileFromUser(fileName, toUserName, roomId) {
+        connectToUserAndDownloadFile(socket, toUserName, roomId, fileName);
+    }
+
+    function downloadFileFromServer(fileName) {
+        let receivedChunks = [];
+        let offset = 0;
+        const fileInfo = {
+            roomId: roomId,
+            name: fileName,
+            size: null,
+            type: null,
+            chunkIndex: 0,
+            fromUser: 'Server',
+            toUser: sessionStorage.getItem('userName'),
+        };
+        socket.emit("downloadFileByChunks", fileInfo);
+        socket.on("emitDownloadFileByChunks", (data) => {
+            if (!data.error) {
+                if (data.finish) {
+                    const fileBlob = new Blob(receivedChunks);
+                    const fileURL = URL.createObjectURL(fileBlob);
+                    const downloadLink = document.createElement('a');
+                    downloadLink.href = fileURL;
+                    downloadLink.download = data.file.fileName;
+                    downloadLink.click();
+                    URL.revokeObjectURL(fileURL);
+                    const progressBarsInformation = progressBarsInformations[data.file.name];
+                    if (progressBarsInformation) {
+                        progressBarsInformation.alertDiv.remove();
+                    }
+                } else {
+                    receivedChunks.push(data.chunk);
+                    offset += data.chunk.byteLength;
+                    fileInfo.chunkIndex++;
+                    socket.emit("downloadFileByChunks", fileInfo);
+                }
+            } else {
+                nameError.style.display = 'block'
+                nameError.classList = "text-danger"
+                nameError.innerHTML = data.message
+            }
+        });
+    }
+
+    function openAccessToTransferByP2P() {
+        const fileInput = document.getElementById('importFileInput');
+        const file = fileInput.files[0];
+        const fileInfo = {
+            roomId: roomId,
+            name: file.name,
+            size: file.size,
+            type: file.type,
+            chunkIndex: 0,
+            fromUser: sessionStorage.getItem('userName'),
+            toUser: 'NAN'
+        };
+        socket.emit('openAccessToTransferByP2P', fileInfo);
+
+    }
+
+    function sendFileToServer() {
+        const fileInput = document.getElementById('importFileInput');
+        const file = fileInput.files[0];
+        const reader = new FileReader();
+        const chunkSize = 5 * 1024 * 1024; // 5 MB
+        let offset = 0;
+        const fileInfo = {
+            roomId: roomId,
+            name: file.name,
+            size: file.size,
+            type: file.type,
+            chunkIndex: 0,
+            fromUser: sessionStorage.getItem('userName'),
+            toUser: 'Server'
+        };
+
+        const readAndEmitChunk = () => {
+            const reader = new FileReader();
+
+            reader.onload = (e) => {
+                const chunk = e.target.result;
+                fileInfo.chunkIndex++;
+                offset += chunk.byteLength;
+                socket.emit('sendFileChunk', fileInfo, chunk);
+                reader.abort();
+            };
+
+            const slice = file.slice(offset, offset + chunkSize);
+            reader.readAsArrayBuffer(slice);
+        };
+
+        socket.on('emitSendFileChunk', (data) => {
+            if (!data.error) {
+                if (offset < file.size) {
+                    readAndEmitChunk();
+                }
+            } else {
+                nameError.style.display = 'block'
+                nameError.classList = "text-danger"
+                nameError.innerHTML = data.message
+            }
+        });
+        readAndEmitChunk();
+    }
+
+    startConnecting();
+
+</script>

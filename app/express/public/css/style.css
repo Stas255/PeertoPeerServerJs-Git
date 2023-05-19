@@ -1,0 +1,18 @@
+html,
+body {
+    height: 100%;
+}
+
+
+#footer {
+    height: 50px;
+}
+
+
+.truncate {
+    display: inline-block;
+    max-width: 150px; /* Specify the maximum width for the span */
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
